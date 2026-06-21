@@ -28,9 +28,13 @@ python3 fleet_grid_server.py --sim --robots 3
 ## STEP 2 — 실물 1대 격자 주행
 - [ ] `firmware/robot_grid/robot_grid.ino` 업로드 (ROBOT_ID=1). 8자용 `robot.ino` 와 별개.
 - [ ] 십자(+) 또는 작은 격자 트랙. 라인 폭 19mm 검정테이프, 밝은 바닥.
+- [ ] ⚠️ **초기 방향 규약**: 서버는 모든 로봇이 처음에 **북(N=행 감소 방향, 0번 노드 쪽)** 을 보고
+      있다고 가정한다(`RobotState heading=N` 기본값). 로봇을 트랙에 올릴 때 **북을 향하게** 놓을 것.
+      안 그러면 출발 노드에서의 첫 회전 명령이 어긋난다(직진해야 할 걸 좌회전 등). 다른 방향이 편하면
+      `fleet_grid_server.py` 의 `RobotState(start)` 초기 heading 을 실제 방향으로 바꿔라.
 - [ ] 허브 연결 후: `python3 fleet_grid_server.py --port /dev/tty.usbserial-XXXX --robots 1`
 - [ ] `goto 1 3` → 로봇이 경로를 따라 교차로마다 서버 명령대로 좌/우/직진 하는지.
-- [ ] **안 맞으면**: 회전각 `TURN_MS`, 교차로 진입 `NUDGE_MS`, 재검출 `RENODE_MS` 튜닝.
+- [ ] **안 맞으면**: (먼저 초기 방향 규약 확인) 회전각 `TURN_MS`, 교차로 진입 `NUDGE_MS`, 재검출 `RENODE_MS` 튜닝.
 
 ## STEP 3 — 실물 3대 + 교차로 양보
 - [ ] 로봇2/3 도 `robot_grid.ino`(ROBOT_ID=2,3) 업로드 + 배선.
