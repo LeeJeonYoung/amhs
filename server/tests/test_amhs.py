@@ -224,6 +224,23 @@ def test_gridfleet_reroute_around_block():
     assert _occ_invariant(fleet)
 
 
+def test_gridfleet_deadlock_retreat():
+    """사방의 생산적 경로가 막히면 인접 빈 노드로 후퇴(_recover)하는지 — 직접 검증.
+    3x3 중앙(4)에서 0으로 가야 하는데 0의 유일한 이웃 1,3을 유휴 로봇이 점유 → 후퇴만 가능."""
+    d = _SyncDriver()
+    fleet = fgs.GridFleet(3, 3, {1: 4, 2: 1, 3: 3}, d.send)
+    fleet.goto(1, 0)                              # RUN 전송(R2,R3은 유휴 블로커)
+    # 출발 보고 1회 + 임계치까지 폴링(허브 연속 폴링 흉내) → _recover 가 후퇴 명령을 내림
+    for _ in range(fgs.DEADLOCK_THRESH + 2):
+        fleet.on_status(1, fgs.ST_WAIT_NODE, 0, 0)
+    r = fleet.robots[1]
+    # 막힌 중앙(4)을 떠나 빈 이웃(5 또는 7)으로 실제 후퇴했는지(durable outcome)
+    assert r.pos in (5, 7), f"후퇴 안 함: pos={r.pos}"
+    assert _occ_invariant(fleet)                 # 후퇴 중에도 한 노드 한 대
+    assert any(rid == 1 and mode not in (fgs.MODE_STOP, fgs.MODE_RUN)
+               for rid, mode in d.sent)          # 후퇴 회전명령이 실제로 나감
+
+
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
