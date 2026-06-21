@@ -1,0 +1,64 @@
+# 07. 격자(田) 버전 실행 순서 — 1대 → 3대 → LLM
+
+> 8자(`04_run_order.md`)가 끝났다는 전제. 격자는 "교차로에서 좌/우/직진/유턴을 골라야"
+> 하므로 `robot_grid.ino` + `fleet_grid_server.py` + `navigator.py` 세트를 쓴다.
+> **하드웨어가 없어도 STEP 0·1 은 노트북만으로 시연·검증된다.**
+
+## STEP 0 — 알고리즘만 먼저 (하드웨어 0%)
+```bash
+cd server
+python3 nav_demo.py --scenarios          # 출발/도착 → 노드별 좌/우/직진/유턴 결정 출력
+python3 nav_demo.py --from 0 --to 15 --heading N
+python3 sim_grid.py --ab                 # 배차×경로 4조합 KPI 비교(오프라인 시뮬)
+python3 tests/test_amhs.py               # 18개 단위/통합 테스트 (회전·예약·관제 전부)
+```
+- **확인**: 회전 결정이 말이 되는지(북 보고 동쪽 = 우회전), 시뮬 완료율 0.9+·충돌 0.
+
+## STEP 1 — 가짜 로봇으로 관제 서버 전체 구동 (하드웨어 0%)
+```bash
+python3 fleet_grid_server.py --sim --robots 3
+# grid> goto 1 15
+# grid> goto 2 12
+# grid> goto 3 3
+# grid> status
+```
+- **확인**: 3대가 교차 목적지로 가며 로그에 `[재경로]`/`[회복]` 이 뜨고, 모두 `[완료]`.
+- 이 단계가 통과하면 **제어 로직은 끝**. 이후는 같은 로직에 진짜 로봇을 붙이는 일.
+
+## STEP 2 — 실물 1대 격자 주행
+- [ ] `firmware/robot_grid/robot_grid.ino` 업로드 (ROBOT_ID=1). 8자용 `robot.ino` 와 별개.
+- [ ] 십자(+) 또는 작은 격자 트랙. 라인 폭 19mm 검정테이프, 밝은 바닥.
+- [ ] 허브 연결 후: `python3 fleet_grid_server.py --port /dev/tty.usbserial-XXXX --robots 1`
+- [ ] `goto 1 3` → 로봇이 경로를 따라 교차로마다 서버 명령대로 좌/우/직진 하는지.
+- [ ] **안 맞으면**: 회전각 `TURN_MS`, 교차로 진입 `NUDGE_MS`, 재검출 `RENODE_MS` 튜닝.
+
+## STEP 3 — 실물 3대 + 교차로 양보
+- [ ] 로봇2/3 도 `robot_grid.ino`(ROBOT_ID=2,3) 업로드 + 배선.
+- [ ] `python3 fleet_grid_server.py --port ... --robots 3`
+- [ ] 서로 교차하는 목적지를 줘서(`goto 1 15`,`goto 2 12`) **한 노드에 한 대만** 들어가는지,
+      막히면 우회/후퇴로 풀리는지 확인. (로그가 STEP 1 과 같은 모양이어야 정상)
+
+## STEP 4 — LLM 사령관 연결
+```bash
+# 새 터미널 (fleet_grid_server 실행 중인 상태에서)
+ollama serve &                 # 안 떠 있으면
+python3 brain/llm_grid.py
+# 사령관에게> 1번 로봇 15번으로, 2번은 12번으로 보내
+# 사령관에게> 상태 알려줘
+# 사령관에게> 전부 정지
+```
+- **확인**: 자연어가 `send_robot_to(1,15)` 같은 도구 호출로 바뀌어 서버에 꽂히는지.
+
+## 명령/상태 값 (격자 버전, navigator.py 정본)
+- mode: `0 STOP / 1 RUN / 2 STRAIGHT / 3 RIGHT / 4 UTURN / 5 LEFT`
+- state: `0 IDLE / 1 RUNNING / 2 WAIT_NODE / 3 NUDGE / 4 TURNING`
+- 노드 id = `row * cols + col` (4x4면 0=좌상단 … 15=우하단). 방위 N=위 E=오른쪽 S=아래 W=왼쪽.
+
+## 흔한 문제 (격자 한정)
+| 증상 | 원인/해결 |
+|---|---|
+| 출발 노드에서 안 나감 | 출발 명령이 회전(2~5)으로 가야 NUDGE 탈출 — 서버가 자동 처리. 안 되면 `goto` 재전송 |
+| 회전 각도 안 맞음 | `TURN_MS`(90°)/`UTURN_MS`(180°) 실측 튜닝 |
+| 회전 직후 같은 노드 재인식 | `RENODE_MS` ↑ |
+| 3대 중 한 대가 계속 대기 | 정상(양보 중)일 수 있음. 오래면 `status` 로 occupied 확인, 데드락이면 회복 로그 확인 |
+| 서버가 위치를 잘못 앎 | 로봇이 교차로를 놓침(인식 실패) → B/C 항목(`06_trial_and_error.md`) 재튜닝 |
