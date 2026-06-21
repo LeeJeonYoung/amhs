@@ -59,7 +59,9 @@ agv-fleet/
 │  ├─ sim_grid.py                  오프라인 격자 시뮬 러너
 │  └─ tests/test_amhs.py           18개 단위/통합 테스트
 └─ brain/
-   ├─ llm_grid.py                  ★ LLM 사령관(격자, 목적지 배차)
+   ├─ llm_grid.py                  LLM 사령관(격자) — 로컬 Ollama
+   ├─ llm_grid_claude.py           ★ LLM 사령관(격자) — Claude API
+   ├─ llm_grid_cli.py              ★ LLM 사령관(격자) — Claude 구독 CLI(-p 서브프로세스, API 키 불필요)
    └─ llm_orchestrator.py          LLM 사령관(8자, 출발/정지)
 ```
 

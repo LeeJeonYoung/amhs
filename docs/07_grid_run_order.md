@@ -42,16 +42,28 @@ python3 fleet_grid_server.py --sim --robots 3
 - [ ] 서로 교차하는 목적지를 줘서(`goto 1 15`,`goto 2 12`) **한 노드에 한 대만** 들어가는지,
       막히면 우회/후퇴로 풀리는지 확인. (로그가 STEP 1 과 같은 모양이어야 정상)
 
-## STEP 4 — LLM 사령관 연결
+## STEP 4 — LLM 사령관 연결 (두뇌 3종 중 택1)
+fleet_grid_server 실행 중인 상태에서 새 터미널:
 ```bash
-# 새 터미널 (fleet_grid_server 실행 중인 상태에서)
-ollama serve &                 # 안 떠 있으면
-python3 brain/llm_grid.py
-# 사령관에게> 1번 로봇 15번으로, 2번은 12번으로 보내
-# 사령관에게> 상태 알려줘
-# 사령관에게> 전부 정지
+# (A) 로컬 Ollama — 오프라인·무료, 작은 모델
+ollama serve & ; python3 brain/llm_grid.py
+# (B) Claude API — 똑똑함, 종량 과금
+export ANTHROPIC_API_KEY=... ; python3 brain/llm_grid_claude.py
+# (C) Claude 구독 CLI — 똑똑함 + 구독 한도 내, API 키 불필요(권장)
+python3 brain/llm_grid_cli.py        # 이미 로그인된 claude CLI 를 -p 로 호출
 ```
-- **확인**: 자연어가 `send_robot_to(1,15)` 같은 도구 호출로 바뀌어 서버에 꽂히는지.
+지시 예: `1번 12번에서 3번으로 운반, 2번은 15번으로` / `상태` / `전부 정지`
+- **확인**: 자연어가 `assign_mission(1,12,3)`/`send_robot_to(2,15)` 도구 호출로 바뀌어 서버에 꽂히는지.
+
+## STEP 5 — A→B 운반 작업 배차(시뮬·실물 공통)
+```bash
+# grid> 단건 운반:  mission <로봇> <적재> <하역>
+grid> mission 1 12 3
+# grid> 여러 작업 Hungarian 최적 배차:  dispatch <s1> <d1> <s2> <d2> ...
+grid> dispatch 1 13 2 14
+```
+- 로봇이 적재지로 가 `[적재]` 로그 → 하역지로 가 `[하역]` 로그까지 나오면 정상.
+- `dispatch` 는 유휴 로봇에 '가장 가까운 적재지' 기준으로 작업을 최적 할당(오프라인 시뮬과 동일 알고리즘).
 
 ## 명령/상태 값 (격자 버전, navigator.py 정본)
 - mode: `0 STOP / 1 RUN / 2 STRAIGHT / 3 RIGHT / 4 UTURN / 5 LEFT`

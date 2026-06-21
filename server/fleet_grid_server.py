@@ -24,9 +24,10 @@ import threading
 import time
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from amhs.graph import RailGraph                                  # noqa: E402
+from amhs.graph import RailGraph, all_pairs                       # noqa: E402
 from amhs.router import static_route                              # noqa: E402
 from amhs.traffic import Traffic                                  # noqa: E402
+from amhs.dispatch import hungarian                               # noqa: E402
 from amhs.geometry import N, DIR_NAME                             # noqa: E402
 from amhs.navigator import (plan, MODE_STOP, MODE_RUN, MODE_NAME) # noqa: E402
 
@@ -34,12 +35,13 @@ from amhs.navigator import (plan, MODE_STOP, MODE_RUN, MODE_NAME) # noqa: E402
 ST_IDLE, ST_RUNNING, ST_WAIT_NODE, ST_NUDGE, ST_TURNING = 0, 1, 2, 3, 4
 ST_NAME = {0: "IDLE", 1: "RUNNING", 2: "WAIT_NODE", 3: "NUDGE", 4: "TURNING"}
 
-DEADLOCK_THRESH = 4   # 막힌 채 이만큼 펌프되면 회복(유턴 후퇴) 시도
+DEADLOCK_THRESH = 4         # 막힌 채 이만큼 펌프되면 회복(유턴 후퇴) 시도
+PH_TO_SRC, PH_TO_DST = 0, 1 # A→B 운반 임무 단계: 적재지로 / 하역지로
 
 
 class RobotState:
     __slots__ = ("pos", "heading", "dest", "steps", "pending_to",
-                 "pending_heading", "waiting", "blocked")
+                 "pending_heading", "waiting", "blocked", "mission", "phase")
 
     def __init__(self, pos, heading=N):
         self.pos = pos              # 서버가 믿는 현재 노드
@@ -50,6 +52,8 @@ class RobotState:
         self.pending_heading = heading
         self.waiting = False        # 노드에서 명령 대기 중(ST_WAIT_NODE)
         self.blocked = 0            # 연속 막힘 횟수(데드락 감지)
+        self.mission = None         # A→B 운반 임무 (src, dst) — 없으면 단순 이동
+        self.phase = None           # PH_TO_SRC / PH_TO_DST
 
 
 class GridFleet:
@@ -57,6 +61,7 @@ class GridFleet:
 
     def __init__(self, rows, cols, starts, send, speed=150, on_event=None):
         self.g = RailGraph(rows, cols)
+        self.D = all_pairs(self.g)          # 노드쌍 최단거리 — Hungarian 배차 비용
         self.send = send
         self.speed = speed
         self.on_event = on_event or (lambda m: None)
@@ -67,21 +72,54 @@ class GridFleet:
             self.robots[rid] = RobotState(start)
         self.lock = threading.Lock()
 
-    # ── 목적지 지시 ──
+    # ── 한 로봇을 dest 로 출발시키는 공통 루틴(락은 호출자가 보유) ──
+    def _start(self, rid, dest):
+        r = self.robots[rid]
+        r.dest = dest
+        r.blocked = 0
+        route = static_route(self.g, r.pos, dest, blocked=self.traffic.blocked_set(rid, dest))
+        r.steps = plan(self.g, r.pos, r.heading, route)
+        r.pending_to = None
+        r.waiting = False
+        # IDLE 탈출용 RUN. 로봇은 출발 노드에서 ST_WAIT_NODE 를 한 번 보고한다.
+        self.send(rid, MODE_RUN, self.speed)
+
+    # ── 단순 이동 지시 ──
     def goto(self, rid, dest):
         with self.lock:
             r = self.robots[rid]
-            r.dest = dest
-            r.blocked = 0
-            blocked = self.traffic.blocked_set(rid, dest)
-            route = static_route(self.g, r.pos, dest, blocked=blocked)
-            r.steps = plan(self.g, r.pos, r.heading, route)
-            r.pending_to = None
-            r.waiting = False
+            r.mission = None
+            r.phase = None
+            self._start(rid, dest)
             self.on_event(f"[지시] 로봇{rid}: {r.pos} → {dest}  "
                           f"경로 {[r.pos] + [s.to for s in r.steps]}")
-            # IDLE 탈출용 RUN. 로봇은 출발 노드에서 ST_WAIT_NODE 를 한 번 보고한다.
-            self.send(rid, MODE_RUN, self.speed)
+
+    # ── A→B 운반 임무 배차(한 대) ──
+    def assign_mission(self, rid, src, dst):
+        with self.lock:
+            r = self.robots[rid]
+            r.mission = (src, dst)
+            r.phase = PH_TO_SRC
+            self._start(rid, src)          # 먼저 적재지(src)로
+            self.on_event(f"[배차] 로봇{rid}: 적재 {src} → 하역 {dst} (현재 {r.pos})")
+
+    # ── 여러 A→B 작업을 유휴 로봇에 Hungarian 최적 배차 ──
+    def dispatch(self, tasks):
+        """tasks = [(src, dst), ...]. 유휴 로봇에 '가장 가까운 적재지' 기준 최적 할당."""
+        with self.lock:
+            idle = [rid for rid, r in self.robots.items()
+                    if r.dest is None and r.mission is None]
+        if not idle or not tasks:
+            return
+        cost = [[self.D[self.robots[rid].pos].get(src, 1e9) for src, _ in tasks]
+                for rid in idle]
+        a = hungarian(cost)                # 로봇 i → 작업 a[i] (없으면 -1)
+        self.on_event(f"[배차] Hungarian: 유휴 {idle} × 작업 {tasks}")
+        for i, rid in enumerate(idle):
+            j = a[i]
+            if 0 <= j < len(tasks):
+                src, dst = tasks[j]
+                self.assign_mission(rid, src, dst)
 
     def stop(self, rid):
         with self.lock:
@@ -124,12 +162,24 @@ class GridFleet:
                 if not r.waiting or r.pending_to is not None or r.dest is None:
                     continue
 
-                if r.pos == r.dest:                         # 진짜 목적지 도착
-                    self.send(rid, MODE_STOP, 0)
-                    r.waiting = False
-                    self.on_event(f"[완료] 로봇{rid} 목적지 {r.dest} 도착")
-                    r.dest = None
-                    continue
+                if r.pos == r.dest:                         # 목표 노드 도착
+                    if r.mission is not None and r.phase == PH_TO_SRC:
+                        # 적재지 도착 → 하역지로 계속(정지하지 않고 재계획)
+                        r.phase = PH_TO_DST
+                        r.dest = r.mission[1]
+                        r.steps = []
+                        self.on_event(f"[적재] 로봇{rid} {r.pos} 적재 → {r.dest} 운반")
+                    else:                                    # 단순이동 도착 or 하역 완료
+                        self.send(rid, MODE_STOP, 0)
+                        r.waiting = False
+                        if r.mission is not None:
+                            self.on_event(f"[하역] 로봇{rid} {r.dest} 도착·하역 완료")
+                        else:
+                            self.on_event(f"[완료] 로봇{rid} 목적지 {r.dest} 도착")
+                        r.dest = None
+                        r.mission = None
+                        r.phase = None
+                        continue
 
                 if not r.steps:                             # 경로 소진(후퇴 등) → 재계획
                     route = static_route(self.g, r.pos, r.dest,
@@ -188,6 +238,7 @@ class GridFleet:
                 "robots": {rid: {
                     "pos": r.pos, "heading": DIR_NAME[r.heading],
                     "dest": r.dest, "moving_to": r.pending_to,
+                    "mission": r.mission,
                     "remaining": len(r.steps),
                     "status": "moving" if r.pending_to is not None
                               else ("waiting" if r.waiting else "idle"),
@@ -286,6 +337,12 @@ def _dispatch(fleet, req):
             for rid, dest in req["dests"].items():
                 fleet.goto(int(rid), int(dest))
             return {"ok": True}
+        if act == "mission":
+            fleet.assign_mission(int(req["robot"]), int(req["src"]), int(req["dst"]))
+            return {"ok": True}
+        if act == "dispatch":
+            fleet.dispatch([(int(s), int(d)) for s, d in req["tasks"]])
+            return {"ok": True}
         if act == "stop":
             fleet.stop(int(req["robot"])); return {"ok": True}
         if act == "stop_all":
@@ -327,7 +384,8 @@ def main():
 
     threading.Thread(target=socket_server, args=(fleet,), daemon=True).start()
 
-    print("명령: goto <rid> <dest> / status / stop <rid> / stopall / quit")
+    print("명령: goto <rid> <dest> / mission <rid> <src> <dst> / "
+          "dispatch <s1> <d1> <s2> <d2>... / status / stop <rid> / stopall / quit")
     while True:
         try:
             c = input("grid> ").strip().split()
@@ -337,6 +395,10 @@ def main():
             continue
         if c[0] == "goto" and len(c) == 3:
             fleet.goto(int(c[1]), int(c[2]))
+        elif c[0] == "mission" and len(c) == 4:
+            fleet.assign_mission(int(c[1]), int(c[2]), int(c[3]))
+        elif c[0] == "dispatch" and len(c) >= 3 and (len(c) - 1) % 2 == 0:
+            fleet.dispatch([(int(c[i]), int(c[i + 1])) for i in range(1, len(c), 2)])
         elif c[0] == "status":
             print(json.dumps(fleet.snapshot(), ensure_ascii=False, indent=2))
         elif c[0] == "stop" and len(c) == 2:

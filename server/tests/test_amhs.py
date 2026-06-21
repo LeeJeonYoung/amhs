@@ -241,6 +241,29 @@ def test_gridfleet_deadlock_retreat():
                for rid, mode in d.sent)          # 후퇴 회전명령이 실제로 나감
 
 
+def test_gridfleet_mission_pickup_deliver():
+    """A→B 운반 임무: 적재지 경유 후 하역지 도착."""
+    d = _SyncDriver()
+    fleet = fgs.GridFleet(4, 4, {1: 0}, d.send)
+    fleet.assign_mission(1, 5, 15)               # 적재 5 → 하역 15
+    used = d.run(fleet)
+    assert used < 20000
+    assert fleet.robots[1].pos == 15             # 하역지 도착
+    assert fleet.robots[1].mission is None        # 임무 종료
+    assert _occ_invariant(fleet)
+
+
+def test_gridfleet_dispatch_hungarian():
+    """여러 A→B 작업을 유휴 로봇에 Hungarian 최적 배차 → 전원 완료."""
+    d = _SyncDriver()
+    fleet = fgs.GridFleet(4, 4, {1: 0, 2: 3}, d.send)
+    fleet.dispatch([(1, 13), (2, 14)])           # 두 작업, 두 로봇
+    used = d.run(fleet)
+    assert used < 20000
+    assert all(fleet.robots[r].mission is None for r in (1, 2))   # 둘 다 완료
+    assert _occ_invariant(fleet)
+
+
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
