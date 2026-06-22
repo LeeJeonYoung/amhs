@@ -23,7 +23,10 @@
 #include <RF24.h>
 
 // ─── 설정 ────────────────────────────────────────
+// 업로드 시 덮어쓰기 가능: arduino-cli ... --build-property build.extra_flags=-DROBOT_ID=2
+#ifndef ROBOT_ID
 #define ROBOT_ID   1
+#endif
 
 #define IR_LEFT    A0
 #define IR_RIGHT   A5

@@ -26,7 +26,13 @@ python3 fleet_grid_server.py --sim --robots 3
 - 이 단계가 통과하면 **제어 로직은 끝**. 이후는 같은 로직에 진짜 로봇을 붙이는 일.
 
 ## STEP 2 — 실물 1대 격자 주행
-- [ ] `firmware/robot_grid/robot_grid.ino` 업로드 (ROBOT_ID=1). 8자용 `robot.ino` 와 별개.
+- [ ] `firmware/robot_grid/robot_grid.ino` 업로드. 8자용 `robot.ino` 와 별개.
+      로봇별 ID는 소스 수정 없이 **빌드플래그**로 지정(검증된 방식):
+      ```
+      arduino-cli compile --fqbn arduino:avr:uno -u -p <로봇포트> \
+        --build-property build.extra_flags=-DROBOT_ID=2  firmware/robot_grid   # 2호기(3은 =3)
+      ```
+      업로드 후 시리얼(115200)에 `[robot2] grid ready` 가 찍히면 ID 확인 완료.
 - [ ] 십자(+) 또는 작은 격자 트랙. 라인 폭 19mm 검정테이프, 밝은 바닥.
 - [ ] ⚠️ **초기 방향 규약**: 서버는 모든 로봇이 처음에 **북(N=행 감소 방향, 0번 노드 쪽)** 을 보고
       있다고 가정한다(`RobotState heading=N` 기본값). 로봇을 트랙에 올릴 때 **북을 향하게** 놓을 것.
