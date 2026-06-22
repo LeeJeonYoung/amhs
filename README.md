@@ -7,6 +7,12 @@
 > **하드웨어가 없어도** 알고리즘·관제·LLM 전 스택을 노트북만으로 결정론적으로 시연/테스트할 수 있다.
 > (`server/nav_demo.py`, `fleet_grid_server.py --sim`, `tests/` 18개 통과)
 
+> ### ★ 실물 검증 (2026-06-23)
+> 라인트레이서 **1대로 격자 경로 완주** — 라인추종 → 교차로 감지 → **연속 회전** → 목적지 정지 시퀀스 실주행 성공.
+> 시뮬(알고리즘)을 실물 제어로 내리며 마주친 물리 계층 디버깅(IR 센서 극성·조향 방향·회전 기구학·자력출발 토크·길잃음 복구·전원/무선 안정성) 전 과정은 → [`docs/08_physical_bringup.md`](docs/08_physical_bringup.md)
+> **실물 주행 도구**: `server/grid_drive.py`(고수준 경로 시퀀서 `"S1 R1 R1 R1"` + 재전송) · `server/serial_broker.py`(허브 시리얼 공유) · `firmware/diagnostics/line_follow_test`(무선 없이 단독 라인추종 검증)
+> 펌웨어 진화는 `firmware/_versions/`(v1~v10). **3대 동시 주행은 전원(배터리)·무선(nRF24) 안정화 후 과제** — 다중 로봇 병목은 알고리즘이 아니라 전원·통신 안정성(실 AMHS와 동일).
+
 ## 아키텍처 (3층)
 ```
 ┌─ Layer 3: 두뇌 (로컬 LLM / Ollama) ─────────────────┐
