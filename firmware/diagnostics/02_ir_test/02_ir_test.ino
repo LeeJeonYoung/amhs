@@ -22,10 +22,10 @@
  * ※ 키트가 아날로그 출력 센서면 아래 USE_ANALOG 를 1 로 바꿔 raw 값도 같이 본다.
  */
 
-#define IR_LEFT   A0   // robot.ino 와 동일
-#define IR_RIGHT  A1
+#define IR_LEFT   A0   // robot_grid.ino 와 동일
+#define IR_RIGHT  A5   // (A1 은 nRF24 CSN — 오른쪽 IR 은 A5)
 
-#define USE_ANALOG 0   // 1로 바꾸면 analogRead raw 값도 출력(아날로그 센서일 때 임계값 잡기용)
+#define USE_ANALOG 1   // 1로 바꾸면 analogRead raw 값도 출력(아날로그 센서일 때 임계값 잡기용)
 
 void setup() {
   Serial.begin(115200);

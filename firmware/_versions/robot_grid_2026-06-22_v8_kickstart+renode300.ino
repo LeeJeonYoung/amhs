@@ -44,10 +44,8 @@
 #define UTURN_MS    1300        // 180° 선회 = 90°의 약 2배(실측 후 조정)
 #define INTERSECT_MS 50         // 교차로 판정: 50ms 이상 지속돼야 인정(오인식 방지)
 #define RENODE_MS   300         // 같은 교차로 재검출 방지(통과 직후 무시 구간) — 회전 직후 가까운 교차로도 잡게 단축
-#define KICK_MS     900         // 출발/회전 직후 부스트 시간 (길게 — 약한 배터리 락 방지)
+#define KICK_MS     300         // 출발/회전 직후 정지마찰 극복 부스트 시간
 #define KICK_SPEED  255         // 부스트 속도(최대) — 첫 KICK_MS 동안만
-#define LOST_MS     4000        // 라인 접촉(센서/교차로) 없이 이 시간 넘으면 = 길잃음/벽
-#define RECOVER_MS  900         // 복구 후진 최대 시간(라인 재접촉 시 즉시 정지)
 
 #define PIN_CE  6               // 더미 — CE 5V 직결
 #define PIN_CSN A1
@@ -68,7 +66,7 @@ struct Command { uint8_t mode; uint8_t speed; };
 struct Status  { uint8_t robot_id; uint8_t state; uint8_t node; uint8_t obstacle; };
 
 enum CmdMode { MODE_STOP=0, MODE_RUN=1, MODE_STRAIGHT=2, MODE_RIGHT=3, MODE_UTURN=4, MODE_LEFT=5, MODE_FWD=6 };
-enum RobotSt { ST_IDLE=0, ST_RUNNING=1, ST_WAIT_NODE=2, ST_NUDGE=3, ST_TURNING=4, ST_RECOVER=5 };
+enum RobotSt { ST_IDLE=0, ST_RUNNING=1, ST_WAIT_NODE=2, ST_NUDGE=3, ST_TURNING=4 };
 
 Command cmd = {MODE_STOP, BASE_SPEED};
 Status  st  = {ROBOT_ID, ST_IDLE, 0, 0};
@@ -78,7 +76,6 @@ uint32_t turnDur     = 0;       // 이번 회전에 쓸 시간(90°/180°)
 uint32_t stateStart  = 0;
 uint32_t lastNode    = 0;
 uint32_t bothOnStart = 0;       // L&&R 최초 감지 시각
-uint32_t lastLineEvent = 0;     // 마지막 라인 접촉(센서/교차로) 시각 — 길잃음 판정용
 
 // ─── 모터 헬퍼 ───────────────────────────────────
 void stopMotors() { motorL.run(RELEASE); motorR.run(RELEASE); }
@@ -87,10 +84,6 @@ void goForward(uint8_t s) {
   uint8_t sr = (s + TRIM_R > 255) ? 255 : s + TRIM_R;
   motorL.setSpeed(s);  motorL.run(L_FWD);
   motorR.setSpeed(sr); motorR.run(FORWARD);
-}
-void goBackward(uint8_t s) {     // 복구용 후진(양쪽 뒤로)
-  motorL.setSpeed(s); motorL.run(L_BWD);
-  motorR.setSpeed(s); motorR.run(BACKWARD);
 }
 void pivotLeft(uint8_t s) {     // 전진하며 좌선회(호) — 안쪽(왼쪽) 느리게, 후진 없음
   motorL.setSpeed(SLOW_SPEED); motorL.run(L_FWD);
@@ -116,7 +109,7 @@ void lineFollow(bool L, bool R) {
   }
 }
 
-void enterState(uint8_t s) { st.state = s; stateStart = millis(); if (s == ST_RUNNING) lastLineEvent = millis(); }
+void enterState(uint8_t s) { st.state = s; stateStart = millis(); }
 
 // ─── setup ───────────────────────────────────────
 void setup() {
@@ -158,7 +151,6 @@ void loop() {
         break;
 
       case ST_RUNNING:
-        if (L || R) lastLineEvent = now;                // 라인 접촉(센서/교차로) → 길잃음 타이머 리셋
         if (L && R) {                                   // 교차로(가로선) 감지
           if (bothOnStart == 0) bothOnStart = now;
           if (now - bothOnStart >= INTERSECT_MS && now - lastNode > RENODE_MS) {
@@ -172,11 +164,6 @@ void loop() {
         } else {
           bothOnStart = 0;
           lineFollow(L, R);
-          if (now - lastLineEvent > LOST_MS) {          // 라인 한참 못 봄 = 길잃음/벽 → 후진 복구
-            goBackward(BASE_SPEED);
-            enterState(ST_RECOVER);
-            Serial.println(F("lost line -> recover"));
-          }
         }
         break;
 
@@ -208,13 +195,6 @@ void loop() {
           stopMotors();
           lastNode = now;                               // 회전 직후 같은 노드 재검출 방지
           enterState(ST_RUNNING);
-        }
-        break;
-
-      case ST_RECOVER:                                  // 길잃음/벽 복구: 라인 재접촉 또는 시간초과까지 후진
-        if (L || R || now - stateStart >= RECOVER_MS) {
-          stopMotors();
-          enterState(ST_RUNNING);                       // 라인 다시 잡고 추종 재개
         }
         break;
     }

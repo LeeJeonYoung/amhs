@@ -44,7 +44,7 @@
 #define UTURN_MS    1300        // 180° 선회 = 90°의 약 2배(실측 후 조정)
 #define INTERSECT_MS 50         // 교차로 판정: 50ms 이상 지속돼야 인정(오인식 방지)
 #define RENODE_MS   300         // 같은 교차로 재검출 방지(통과 직후 무시 구간) — 회전 직후 가까운 교차로도 잡게 단축
-#define KICK_MS     900         // 출발/회전 직후 부스트 시간 (길게 — 약한 배터리 락 방지)
+#define KICK_MS     300         // 출발/회전 직후 정지마찰 극복 부스트 시간
 #define KICK_SPEED  255         // 부스트 속도(최대) — 첫 KICK_MS 동안만
 #define LOST_MS     4000        // 라인 접촉(센서/교차로) 없이 이 시간 넘으면 = 길잃음/벽
 #define RECOVER_MS  900         // 복구 후진 최대 시간(라인 재접촉 시 즉시 정지)
