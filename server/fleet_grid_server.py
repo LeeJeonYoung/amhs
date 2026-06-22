@@ -26,6 +26,7 @@ import time
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
 from amhs.graph import RailGraph, all_pairs                       # noqa: E402
 from amhs.router import static_route                              # noqa: E402
+from amhs.timing import time_route, route_time                    # noqa: E402
 from amhs.traffic import Traffic                                  # noqa: E402
 from amhs.dispatch import hungarian                               # noqa: E402
 from amhs.geometry import N, DIR_NAME                             # noqa: E402
@@ -59,12 +60,15 @@ class RobotState:
 class GridFleet:
     """순수 제어 로직 — send(rid, mode, speed) 콜백으로만 바깥과 통신(테스트 용이)."""
 
-    def __init__(self, rows, cols, starts, send, speed=150, on_event=None):
+    def __init__(self, rows, cols, starts, send, speed=150, on_event=None, routing="distance"):
         self.g = RailGraph(rows, cols)
-        self.D = all_pairs(self.g)          # 노드쌍 최단거리 — Hungarian 배차 비용
+        self.D = all_pairs(self.g)          # 노드쌍 홉수 — 거리기반 배차 비용
         self.send = send
         self.speed = speed
         self.on_event = on_event or (lambda m: None)
+        # "distance"(홉수, 다중로봇 안정) | "time"(회전·이동시간, 단일로봇 최적)
+        # ※ 시간 라우팅은 경로가 직선적이라 다중로봇에선 통로 경합↑ → 기본은 distance, 시간은 옵션.
+        self.routing = routing
         self.traffic = Traffic()
         self.robots = {}
         for rid, start in starts.items():
@@ -72,12 +76,19 @@ class GridFleet:
             self.robots[rid] = RobotState(start)
         self.lock = threading.Lock()
 
+    # ── 경로 1줄(현재 제외) 계산: 모드에 따라 시간최단 / 홉최단 ──
+    def _route(self, r, dest, blocked=None):
+        if self.routing == "time":
+            path = time_route(self.g, r.pos, dest, r.heading, blocked=blocked)[0]
+            return path[1:] if len(path) > 1 else []
+        return static_route(self.g, r.pos, dest, blocked=blocked)
+
     # ── 한 로봇을 dest 로 출발시키는 공통 루틴(락은 호출자가 보유) ──
     def _start(self, rid, dest):
         r = self.robots[rid]
         r.dest = dest
         r.blocked = 0
-        route = static_route(self.g, r.pos, dest, blocked=self.traffic.blocked_set(rid, dest))
+        route = self._route(r, dest, blocked=self.traffic.blocked_set(rid, dest))
         r.steps = plan(self.g, r.pos, r.heading, route)
         r.pending_to = None
         r.waiting = False
@@ -111,10 +122,16 @@ class GridFleet:
                     if r.dest is None and r.mission is None]
         if not idle or not tasks:
             return
-        cost = [[self.D[self.robots[rid].pos].get(src, 1e9) for src, _ in tasks]
-                for rid in idle]
+        if self.routing == "time":          # 비용 = 적재지까지 예상 소요시간(회전 포함)
+            cost = [[route_time(self.g, self.robots[rid].pos, src, self.robots[rid].heading)
+                     for src, _ in tasks] for rid in idle]
+            metric = "예상시간(ms)"
+        else:                               # 비용 = 적재지까지 홉수
+            cost = [[self.D[self.robots[rid].pos].get(src, 1e9) for src, _ in tasks]
+                    for rid in idle]
+            metric = "홉수"
         a = hungarian(cost)                # 로봇 i → 작업 a[i] (없으면 -1)
-        self.on_event(f"[배차] Hungarian: 유휴 {idle} × 작업 {tasks}")
+        self.on_event(f"[배차] Hungarian({metric}): 유휴 {idle} × 작업 {tasks}")
         for i, rid in enumerate(idle):
             j = a[i]
             if 0 <= j < len(tasks):
@@ -182,8 +199,7 @@ class GridFleet:
                         continue
 
                 if not r.steps:                             # 경로 소진(후퇴 등) → 재계획
-                    route = static_route(self.g, r.pos, r.dest,
-                                         blocked=self.traffic.blocked_set(rid, r.dest))
+                    route = self._route(r, r.dest, blocked=self.traffic.blocked_set(rid, r.dest))
                     r.steps = plan(self.g, r.pos, r.heading, route)
                     if not r.steps:                         # 정말 길 없음 → 보류
                         r.blocked += 1
@@ -197,8 +213,7 @@ class GridFleet:
                     continue
 
                 # 막힘 → 점유 노드 회피 재경로
-                alt = static_route(self.g, r.pos, r.dest,
-                                   blocked=self.traffic.blocked_set(rid, r.dest))
+                alt = self._route(r, r.dest, blocked=self.traffic.blocked_set(rid, r.dest))
                 if alt and self.traffic.reserve(alt[0], rid):
                     r.steps = plan(self.g, r.pos, r.heading, alt)
                     self.on_event(f"[재경로] 로봇{rid}: {nxt} 막힘 → 우회 {alt[0]}")

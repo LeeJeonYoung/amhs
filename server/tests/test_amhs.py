@@ -264,6 +264,33 @@ def test_gridfleet_dispatch_hungarian():
     assert _occ_invariant(fleet)
 
 
+from amhs.timing import time_route, NUDGE_MS, DRIVE_MS, TURN_MS   # noqa: E402
+
+
+def test_time_route_minimizes_turns():
+    g = RailGraph(4, 4)
+    path, ms, turns = time_route(g, 0, 10, E)    # 동쪽 보고 0→10
+    assert path[0] == 0 and path[-1] == 10
+    assert turns == 1                            # L자(회전1) 선택, 지그재그(회전3) 회피
+    assert ms == 3 * (NUDGE_MS + DRIVE_MS) + (NUDGE_MS + TURN_MS + DRIVE_MS)
+
+
+def test_time_route_start_heading_matters():
+    g = RailGraph(4, 4)
+    _, ms_e, t_e = time_route(g, 0, 3, E)        # 이미 동쪽 → 직진 3칸
+    _, ms_n, t_n = time_route(g, 0, 3, N)        # 북쪽 → 출발에서 우회전 필요
+    assert t_e == 0 and t_n == 1
+    assert ms_e < ms_n
+
+
+def test_gridfleet_time_routing_completes():
+    d = _SyncDriver()
+    fleet = fgs.GridFleet(4, 4, {1: 0}, d.send, routing="time")
+    fleet.goto(1, 15)
+    used = d.run(fleet)
+    assert used < 20000 and fleet.robots[1].pos == 15 and _occ_invariant(fleet)
+
+
 if __name__ == "__main__":
     import traceback
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
